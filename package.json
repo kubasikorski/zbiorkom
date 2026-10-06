@@ -1,0 +1,31 @@
+{
+  "name": "zbiornik-inbox",
+  "productName": "Zbiornik Inbox",
+  "version": "1.0.0",
+  "description": "Podgląd wiadomości i powiadomień zbiornik.com",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac --universal",
+    "dist:arm": "electron-builder --mac --arm64"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.16.0"
+  },
+  "build": {
+    "appId": "pl.kubu.zbiornik-inbox",
+    "productName": "Zbiornik Inbox",
+    "files": ["main.js", "preload.js", "renderer/**"],
+    "mac": {
+      "category": "public.app-category.social-networking",
+      "target": ["dmg"],
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "title": "Zbiornik Inbox"
+    }
+  }
+}

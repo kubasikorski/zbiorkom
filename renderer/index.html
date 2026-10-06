@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' https: data:; style-src 'self'; script-src 'self'">
+<title>Zbiornik Inbox</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="titlebar"></div>
+<main>
+  <header>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="msgs" aria-selected="true">Wiadomości <span class="n" id="nMsgs"></span></button>
+      <button role="tab" data-tab="notifs" aria-selected="false">Powiadomienia <span class="n" id="nNotifs"></span></button>
+    </nav>
+    <span class="updated" id="updated"></span>
+  </header>
+
+  <section class="login" id="loginBox" hidden>
+    <h2>Zaloguj się</h2>
+    <p>Otworzę okno ze stroną logowania zbiornika. Zaloguj się jak zwykle, a wiadomości i powiadomienia pojawią się tu same.</p>
+    <button class="primary" id="loginBtn">Zaloguj się</button>
+    <div class="state" id="loginState" role="status"></div>
+  </section>
+
+  <div id="app" hidden>
+    <div class="tools">
+      <input type="search" id="q" placeholder="Szukaj po nicku lub treści" aria-label="Szukaj">
+      <div class="seg" id="msgFilter" role="group" aria-label="Filtr wiadomości">
+        <button data-f="all" aria-pressed="true">Wszystkie</button>
+        <button data-f="unread" aria-pressed="false">Nieprzeczytane</button>
+        <button data-f="reply" aria-pressed="false">Czekają na odpowiedź</button>
+      </div>
+      <div class="seg" id="notifFilter" role="group" aria-label="Filtr powiadomień" hidden>
+        <button data-f="all" aria-pressed="true">Wszystkie</button>
+        <button data-f="unseen" aria-pressed="false">Nowe</button>
+      </div>
+      <button class="btn" id="refresh">Odśwież</button>
+    </div>
+    <div id="out"></div>
+  </div>
+</main>
+<script src="renderer.js"></script>
+</body>
+</html>
