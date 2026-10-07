@@ -1,6 +1,10 @@
 // Nazwy typów powiadomień. Nowe typy wypisują się w terminalu przy `npm start` — dopisz je tutaj.
 const TYPE_LABELS = {
-  // 1: 'polubienie zdjęcia',
+  1: 'lubi Twoje zdjęcie',
+  10: 'dodał Twoje zdjęcie do ulubionych',
+  12: 'dodał Twój profil do ulubionych',
+  23: 'odpowiedział na Twój komentarz',
+  55: 'również napisał posta w temacie',
 };
 
 let S = null;
@@ -49,11 +53,22 @@ const isUnreadThread = (t) => !t.self && (t.unread > 0 || !t.seen);
 
 // ---------- widoki ----------
 
+function renderMe() {
+  const box = $('me');
+  box.replaceChildren();
+  box.hidden = !S.me || S.needLogin;
+  if (box.hidden) return;
+  box.title = 'Zalogowano jako ' + S.me.nick;
+  box.append(avatar(S.me.nick, S.me.avatar), el('span', 'nick', S.me.nick));
+  if (S.me.isVerified) { const v = el('span', 'tick', '✓'); v.title = 'Zweryfikowany'; box.append(v); }
+  if (S.me.isVIP) box.append(el('span', 'vip', 'VIP'));
+}
+
 function renderLogin() {
   $('app').hidden = true;
   $('loginBox').hidden = false;
   $('updated').textContent = '';
-  $('nMsgs').textContent = ''; $('nNotifs').textContent = '';
+  $('nMsgs').textContent = ''; $('nNotifs').textContent = ''; $('nVisitors').textContent = '';
   $('loginBtn').disabled = S.loggingIn;
   $('loginBtn').textContent = S.loggingIn ? 'Czekam na zalogowanie…' : 'Zaloguj się';
   $('loginState').textContent = S.loginMessage || '';
@@ -92,6 +107,11 @@ function renderThreads(out, q) {
     if (t.self) meta.append(el('span', 'seen', t.seen ? 'Wyświetlone' : 'Wysłane'));
 
     li.append(avatar(t.nick, t.avatar, t.isOnline), body, meta);
+    // Klik w rozmowę otwiera ją na zbiorniku w domyślnej przeglądarce (setWindowOpenHandler w main.js).
+    const url = 'https://zbiornik.com/talk/inbox/dialog/' + encodeURIComponent(t.nick) + '/talk';
+    li.classList.add('link'); li.tabIndex = 0; li.setAttribute('role', 'link'); li.title = 'Otwórz rozmowę na zbiornik.com';
+    li.addEventListener('click', () => window.open(url, '_blank'));
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.open(url, '_blank'); });
     ul.append(li);
   }
   out.append(ul);
@@ -166,8 +186,46 @@ function renderNotifs(out, q) {
   }
 }
 
+function renderVisitors(out, q) {
+  const list = S.visitors.filter((v) => !q || v.nick.toLowerCase().includes(q));
+  if (!list.length) {
+    out.append(el('p', 'msg', S.updatedAt == null ? 'Ładowanie…' : q ? 'Nic nie pasuje do filtra.' : 'Nikt jeszcze nie oglądał Twojego profilu.'));
+  }
+  const ul = el('ul');
+  for (const v of list) {
+    const li = el('li', v.isNew ? 'unread' : '');
+    const body = el('div'); body.style.minWidth = '0';
+    const who = el('div', 'who');
+    who.append(el('span', 'nick', v.nick));
+    if (v.isVerified) { const t = el('span', 'tick', '✓'); t.title = 'Zweryfikowany'; who.append(t); }
+    if (v.status) who.append(el('span', 'status', v.status));
+    body.append(who);
+    if (v.count > 1) body.append(el('div', 'preview', v.count + ' ' + plural(v.count, 'wizyta', 'wizyty', 'wizyt')));
+
+    const meta = el('div', 'meta');
+    if (v.time) meta.append(timeEl(v.time));
+    if (v.isNew) meta.append(el('div', 'badge', '•'));
+
+    li.append(avatar(v.nick, v.avatar, v.isOnline), body, meta);
+    // Klik otwiera profil na zbiorniku w domyślnej przeglądarce.
+    const url = 'https://zbiornik.com/' + encodeURIComponent(v.nick);
+    li.classList.add('link'); li.tabIndex = 0; li.setAttribute('role', 'link'); li.title = 'Otwórz profil na zbiornik.com';
+    li.addEventListener('click', () => window.open(url, '_blank'));
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.open(url, '_blank'); });
+    ul.append(li);
+  }
+  out.append(ul);
+
+  if (S.visitorsHasMore && !q) {
+    const more = el('button', 'btn loadmore', 'Pokaż starsze');
+    more.addEventListener('click', async () => { more.disabled = true; await window.zb.loadMore('visitors'); });
+    out.append(more);
+  }
+}
+
 function render() {
   if (!S) return;
+  renderMe();
   if (S.needLogin) return renderLogin();
   $('loginBox').hidden = true;
   $('app').hidden = false;
@@ -176,16 +234,21 @@ function render() {
   const n = S.notifs.filter((g) => !g.seen).length;
   $('nMsgs').textContent = m || '';
   $('nNotifs').textContent = n || '';
+  $('nVisitors').textContent = S.visitors.filter((v) => v.isNew).length || '';
   $('msgFilter').hidden = tab !== 'msgs';
   $('notifFilter').hidden = tab !== 'notifs';
   $('refresh').disabled = S.loading;
   tick();
 
   const out = $('out');
+  const top = out.scrollTop;                    // odświeżenie nie może przewijać listy na górę
   out.innerHTML = '';
   if (S.error) out.append(el('p', 'msg err', S.error));
   const q = $('q').value.trim().toLowerCase();
-  if (tab === 'msgs') renderThreads(out, q); else renderNotifs(out, q);
+  if (tab === 'msgs') renderThreads(out, q);
+  else if (tab === 'notifs') renderNotifs(out, q);
+  else renderVisitors(out, q);
+  out.scrollTop = top;
 }
 
 function tick() {
@@ -196,6 +259,7 @@ function tick() {
 }
 
 function setTab(t) {
+  if (t !== tab) $('out').scrollTop = 0;
   tab = t;
   document.querySelectorAll('.tabs button').forEach((x) => x.setAttribute('aria-selected', x.dataset.tab === t));
   render();

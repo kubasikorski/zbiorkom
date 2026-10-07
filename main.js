@@ -16,14 +16,19 @@ const REFRESH_MS = 60_000;
 const NOTIF_PAGE = 21;
 const NOTIF_MAX = 210;
 
+const DEVICE_QS = '&actPath=%2F&deviceMobile=0&device=2560x1440%2F2560x1410%2F2560x642&app=';
 const notifUrl = (offset, limit) => SITE + 'ajax/?command=getNotifications'
-  + `&offset=${offset}&limit=${limit}&actPath=%2F&deviceMobile=0`
-  + '&device=2560x1440%2F2560x1410%2F2560x642&app=';
+  + `&offset=${offset}&limit=${limit}` + DEVICE_QS;
+const meUrl = () => SITE + 'ajax/?command=noop' + DEVICE_QS;
+const visitorsBody = (offset, limit) => 'command=whoWatched&type=profile&nick='
+  + `&offset=${offset}&limit=${limit}` + DEVICE_QS;
 
 if (!app.requestSingleInstanceLock()) app.quit();
 
 let ses, win, loginWin, quitting = false;
 let notifLoaded = NOTIF_PAGE;
+let visitorsLoaded = NOTIF_PAGE;
+let csrf = null;                                 // nagłówek x-zb-csrf wymagany przy POST-ach; nie trafia do renderera
 const known = { threads: new Set(), notifs: new Set(), primed: false };
 
 const state = {
@@ -32,10 +37,14 @@ const state = {
   loginMessage: '',
   loginError: false,
   loading: false,
+  me: null,                                      // { nick, avatar, isVerified, isVIP } z command=noop
   threads: [],
   notifs: [],
   notifOffset: 0,
   notifHasMore: false,
+  visitors: [],                                  // kto oglądał mój profil (command=whoWatched)
+  visitorsOffset: 0,
+  visitorsHasMore: false,
   error: null,
   updatedAt: null,
   refreshSeconds: REFRESH_MS / 1000,
@@ -58,19 +67,34 @@ function push() {
   app.dock?.setBadge(unread ? String(unread) : '');
 }
 
-async function zbFetch(url, base = SITE) {
+// `form` (string x-www-form-urlencoded) zamienia zapytanie na POST.
+async function zbFetch(url, base = SITE, form = null) {
   const cookies = await ses.cookies.get({ url: base });
   if (!cookies.some((c) => c.name === 'token')) throw new NeedLogin('Nie jesteś zalogowany.');
 
   let res;
   try {
     res = await ses.fetch(url, {
+      method: form ? 'POST' : 'GET',
+      body: form ?? undefined,
       headers: {
-        'accept': 'application/json, text/plain, */*',
         'accept-language': 'pl,pl-PL;q=0.9,en-US;q=0.8,en;q=0.7',
         'cookie': cookies.map((c) => `${c.name}=${c.value}`).join('; '),
-        'x-requested-with': 'XMLHttpRequest',
-        'referer': base,
+        // POST-y wyglądają jak fetch ze strony głównej zbiornika (tak robi przeglądarka).
+        ...(form ? {
+          'accept': '*/*',
+          'content-type': 'application/x-www-form-urlencoded',
+          'origin': 'https://zbiornik.com',
+          'referer': 'https://zbiornik.com/',
+          'sec-fetch-dest': 'empty',
+          'sec-fetch-mode': 'cors',
+          'sec-fetch-site': 'same-site',
+          ...(csrf && { 'x-zb-csrf': csrf }),
+        } : {
+          'accept': 'application/json, text/plain, */*',
+          'x-requested-with': 'XMLHttpRequest',
+          'referer': base,
+        }),
       },
     });
   } catch (e) {
@@ -83,8 +107,38 @@ async function zbFetch(url, base = SITE) {
     throw new NeedLogin('Sesja wygasła. Zaloguj się ponownie.');
   }
   if (!res.ok) throw new Error(`Serwer odpowiedział HTTP ${res.status}. ${snippet}`);
-  try { return JSON.parse(body); }
+  let data;
+  try { data = JSON.parse(body); }
   catch { throw new NeedLogin('Sesja wygasła. Zaloguj się ponownie.'); }
+  return isApiNote(data) ? JSON.parse(openApiNote(data.t, data.n, data.r)) : data;
+}
+
+// Część odpowiedzi przychodzi zamaskowana jako {r:1, n, t} — odpowiednik isApiNote/openApiNote z zbiornik.js:
+// base64url → XOR z ciągiem xorshift32, którego ziarno to hash FNV z `n` i `r` → UTF-8 JSON.
+function isApiNote(d) {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return false;
+  if (d.r !== 1 && d.r !== '1') return false;
+  if (typeof d.n !== 'string' || typeof d.t !== 'string' || !d.n || !d.t) return false;
+  if (d.ok !== undefined || d.error !== undefined) return false;
+  return Object.keys(d).length <= 3;
+}
+
+function openApiNote(t, n, r) {
+  let seed = 2166136261 ^ parseInt(r, 10);
+  for (let i = 0; i < n.length; i++) {
+    seed ^= n.charCodeAt(i) + i;
+    seed += (seed << 1) + (seed << 4) + (seed << 7) + (seed << 8) + (seed << 24);
+    seed >>>= 0;
+  }
+  let x = seed || 2654435769;
+  const bytes = Buffer.from(t.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  for (let i = 0; i < bytes.length; i++) {
+    x ^= x << 13; x >>>= 0;
+    x ^= x >>> 17; x >>>= 0;
+    x ^= x << 5; x >>>= 0;
+    bytes[i] ^= x & 255;
+  }
+  return bytes.toString('utf8');
 }
 
 // ---------- wiadomości ----------
@@ -112,6 +166,31 @@ async function getThreads(base = SITE) {
   const data = await zbFetch(base + 'ajax/?command=getThreads', base);
   if (!Array.isArray(data.threads)) throw new NeedLogin('Serwer nie zwrócił wątków — prawdopodobnie sesja wygasła.');
   return data.threads.map(parseThread).sort((a, b) => b.time - a.time);
+}
+
+// ---------- zalogowany użytkownik ----------
+
+// Szuka tokenu CSRF w odpowiedzi (klucz zawierający "csrf", na dowolnym poziomie).
+function findCsrf(o, depth = 0) {
+  if (!o || typeof o !== 'object' || depth > 4) return null;
+  for (const [k, v] of Object.entries(o)) {
+    if (/csrf/i.test(k) && typeof v === 'string' && v) return v;
+  }
+  for (const v of Object.values(o)) {
+    const f = findCsrf(v, depth + 1);
+    if (f) return f;
+  }
+  return null;
+}
+
+async function getMe() {
+  const data = await zbFetch(meUrl());
+  const found = data.session?.csrfToken || findCsrf(data);
+  if (found) csrf = found;
+  else if (DEBUG) console.log('[csrf] brak w command=noop, klucze session:', Object.keys(data.session ?? data));
+  const u = data.session?.user;
+  if (!u?.nick) throw new Error('Brak danych użytkownika w odpowiedzi.');
+  return { nick: u.nick, avatar: abs(u.avatar?.c40), isVerified: !!u.isVerified, isVIP: !!u.isVIP };
 }
 
 // ---------- powiadomienia ----------
@@ -174,6 +253,66 @@ async function getNotifications(offset, limit) {
   };
 }
 
+// ---------- kto mnie oglądał ----------
+
+let visitorShapeLogged = false;
+
+function parseVisitor(v) {
+  if (!visitorShapeLogged) {
+    visitorShapeLogged = true;
+    console.log('[oglądający] przykładowy wpis:', JSON.stringify(v).slice(0, 600));
+  }
+  const u = v.user ?? v;
+  return {
+    nick: u.nick ?? v.nick ?? '?',
+    time: Number(v.time ?? v.date ?? v.lastVisit ?? v.watchTime) || 0,
+    count: Number(v.count ?? v.cnt ?? v.visits) || 0,
+    isNew: v.seen === false || v.isNew === true || v.new === true,
+    isOnline: !!(u.isOnline ?? v.isOnline),
+    isVerified: !!(u.isVerified ?? v.isVerified),
+    status: u.status ?? v.status ?? '',
+    avatar: abs(u.avatar?.c40 ?? v.avatar?.c40),
+  };
+}
+
+// Pierwsza tablica obiektów w odpowiedzi — najpierw znane klucze, potem dowolne (do 2 poziomów w głąb).
+function findList(o, depth = 0) {
+  if (Array.isArray(o)) return o.length === 0 || typeof o[0] === 'object' ? o : null;
+  if (!o || typeof o !== 'object' || depth > 2) return null;
+  for (const k of ['list', 'users', 'watched', 'whoWatched', 'items', 'data']) {
+    const f = Array.isArray(o[k]) ? o[k] : null;
+    if (f) return f;
+  }
+  for (const v of Object.values(o)) {
+    const f = findList(v, depth + 1);
+    if (f) return f;
+  }
+  return null;
+}
+
+async function getVisitors(offset, limit) {
+  if (!csrf) await getMe().catch(() => {});
+  if (!csrf) throw new Error('Nie znalazłem tokenu CSRF (x-zb-csrf) w odpowiedzi serwera.');
+  let data;
+  try {
+    data = await zbFetch(SITE + 'ajax/', SITE, visitorsBody(offset, limit));
+  } catch (e) {
+    csrf = null;                                 // może wygasł — przy następnej próbie pobierz od nowa
+    throw e;
+  }
+  const raw = findList(data);
+  if (!raw) {
+    const shape = JSON.stringify(data).slice(0, 300);
+    console.warn('[oglądający] nieznany format odpowiedzi:', shape);
+    throw new Error('Nieznany format odpowiedzi: ' + shape);
+  }
+  return {
+    list: raw.filter((x) => x?.user?.isExists !== false).map(parseVisitor),
+    nextOffset: offset + raw.length,
+    hasMore: raw.length >= limit,
+  };
+}
+
 // ---------- odświeżanie ----------
 
 async function refresh() {
@@ -181,14 +320,20 @@ async function refresh() {
   state.loading = true;
   push();
   try {
-    const [t, n] = await Promise.allSettled([getThreads(), getNotifications(0, Math.min(notifLoaded, NOTIF_MAX))]);
+    const [t, n, me, v] = await Promise.allSettled([
+      getThreads(), getNotifications(0, Math.min(notifLoaded, NOTIF_MAX)), getMe(),
+      getVisitors(0, Math.min(visitorsLoaded, NOTIF_MAX)),
+    ]);
     const nl = [t, n].find((r) => r.status === 'rejected' && r.reason.needLogin);
     if (nl) {
-      Object.assign(state, { needLogin: true, threads: [], notifs: [], error: null, loginMessage: state.loggingIn ? state.loginMessage : nl.reason.message });
+      Object.assign(state, { needLogin: true, me: null, threads: [], notifs: [], visitors: [], error: null, loginMessage: state.loggingIn ? state.loginMessage : nl.reason.message });
       known.primed = false;
       return;
     }
     state.needLogin = false;
+    // Brak danych profilu nie jest błędem wartym komunikatu — nagłówek po prostu zostaje bez nicka.
+    if (me.status === 'fulfilled') state.me = me.value;
+    else console.warn('[noop]', me.reason.message);
     const errs = [];
     if (t.status === 'fulfilled') state.threads = t.value; else errs.push('Wiadomości: ' + t.reason.message);
     if (n.status === 'fulfilled') {
@@ -196,6 +341,11 @@ async function refresh() {
       state.notifOffset = n.value.nextOffset;
       state.notifHasMore = n.value.hasMore;
     } else errs.push('Powiadomienia: ' + n.reason.message);
+    if (v.status === 'fulfilled') {
+      state.visitors = v.value.list;
+      state.visitorsOffset = v.value.nextOffset;
+      state.visitorsHasMore = v.value.hasMore;
+    } else errs.push('Kto mnie oglądał: ' + v.reason.message);
     state.error = errs.join(' ') || null;
     state.updatedAt = Date.now();
     notifyNew();
@@ -205,7 +355,8 @@ async function refresh() {
   }
 }
 
-async function loadMore() {
+async function loadMore(which) {
+  if (which === 'visitors') return loadMoreVisitors();
   try {
     const n = await getNotifications(state.notifOffset, NOTIF_PAGE);
     const have = new Set(state.notifs.map((g) => g.key));
@@ -216,6 +367,20 @@ async function loadMore() {
   } catch (e) {
     if (e.needLogin) state.needLogin = true;
     else state.error = 'Powiadomienia: ' + e.message;
+  }
+  push();
+}
+
+async function loadMoreVisitors() {
+  try {
+    const v = await getVisitors(state.visitorsOffset, NOTIF_PAGE);
+    const have = new Set(state.visitors.map((x) => `${x.nick}|${x.time}`));
+    state.visitors = state.visitors.concat(v.list.filter((x) => !have.has(`${x.nick}|${x.time}`)));
+    state.visitorsOffset = v.nextOffset;
+    state.visitorsHasMore = v.hasMore;
+    visitorsLoaded = v.nextOffset;
+  } catch (e) {
+    state.error = 'Kto mnie oglądał: ' + e.message;   // np. 403 przez zły CSRF — to nie powód do wylogowania
   }
   push();
 }
@@ -316,10 +481,12 @@ function openLogin() {
 
 async function logout() {
   await ses.clearStorageData();
+  csrf = null;
   known.threads.clear(); known.notifs.clear(); known.primed = false;
   notifLoaded = NOTIF_PAGE;
+  visitorsLoaded = NOTIF_PAGE;
   Object.assign(state, {
-    needLogin: true, threads: [], notifs: [], error: null, updatedAt: null,
+    needLogin: true, me: null, threads: [], notifs: [], visitors: [], error: null, updatedAt: null,
     loginMessage: 'Wylogowano. Dane sesji zostały usunięte z aplikacji.', loginError: false,
   });
   push();
@@ -393,6 +560,7 @@ function buildMenu() {
         { label: 'Odśwież', accelerator: 'CmdOrCtrl+R', click: () => refresh() },
         { label: 'Wiadomości', accelerator: 'CmdOrCtrl+1', click: () => goto('msgs') },
         { label: 'Powiadomienia', accelerator: 'CmdOrCtrl+2', click: () => goto('notifs') },
+        { label: 'Kto mnie oglądał', accelerator: 'CmdOrCtrl+3', click: () => goto('visitors') },
         { type: 'separator' },
         { role: 'toggleDevTools', label: 'Narzędzia deweloperskie' },
       ],
@@ -405,7 +573,7 @@ function buildMenu() {
 
 ipcMain.handle('get-state', () => state);
 ipcMain.handle('refresh', () => refresh());
-ipcMain.handle('load-more', () => loadMore());
+ipcMain.handle('load-more', (_e, which) => loadMore(which));
 ipcMain.handle('login', () => openLogin());
 ipcMain.handle('logout', () => logout());
 

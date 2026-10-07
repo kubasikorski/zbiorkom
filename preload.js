@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('zb', {
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   onGoto: (cb) => ipcRenderer.on('goto', (_e, tab) => cb(tab)),
   refresh: () => ipcRenderer.invoke('refresh'),
-  loadMore: () => ipcRenderer.invoke('load-more'),
+  loadMore: (which) => ipcRenderer.invoke('load-more', which),
   login: () => ipcRenderer.invoke('login'),
   logout: () => ipcRenderer.invoke('logout'),
 });

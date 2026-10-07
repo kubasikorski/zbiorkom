@@ -1,17 +1,26 @@
 :root {
   --bg: #171a24; --panel: #1f2330; --line: #2c3142; --text: #e8e9ef;
   --muted: #8b90a3; --rose: #f2789a; --online: #5fd39a; --focus: #8fb3ff;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text); }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }
 body { font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 
 /* pasek tytułu do przeciągania okna (titleBarStyle: hiddenInset) */
 .titlebar { position: fixed; inset: 0 0 auto 0; height: 40px; -webkit-app-region: drag; z-index: 10; }
-main { max-width: 760px; margin: 0 auto; padding: 48px 18px 48px; }
+/* nagłówek i narzędzia stoją w miejscu, przewija się tylko lista (#out) */
+main { height: 100vh; display: flex; flex-direction: column; padding-top: 48px; }
+header, .tools { width: 100%; max-width: 760px; margin-inline: auto; padding-inline: 18px; flex: none; }
+#app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#out { flex: 1; min-height: 0; overflow-y: auto; padding: 0 max(18px, calc((100% - 724px) / 2)) 48px; }
+#out::-webkit-scrollbar { width: 12px; }
+#out::-webkit-scrollbar-track { background: transparent; }
+#out::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; border: 3px solid var(--bg); }
+#out::-webkit-scrollbar-thumb:hover { background: #3c4258; }
 
 header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-.tabs { display: flex; gap: 22px; }
+.tabs { display: flex; gap: 4px 22px; flex-wrap: wrap; }
 .tabs button {
   font: inherit; font-size: 22px; font-weight: 700; letter-spacing: -0.02em;
   background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer;
@@ -21,6 +30,10 @@ header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-
 .tabs .n { font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: 10px; background: var(--rose); color: #1a0f14; }
 .tabs .n:empty { display: none; }
 .updated { margin-left: auto; color: var(--muted); font-size: 12px; }
+.me { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 220px; font-size: 13px; }
+.me .av, .me .av img, .me .av span { width: 26px; height: 26px; font-size: 12px; }
+.me .av { flex: none; }
+.vip { font-size: 10px; font-weight: 700; color: #1a0f14; background: #e8c46a; border-radius: 5px; padding: 0 5px; }
 
 .tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 input[type=search] {
@@ -36,7 +49,7 @@ input[type=search] {
 .btn:disabled { opacity: .5; cursor: default; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-.login { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px; margin-top: 20px; }
+.login { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px; margin: 20px auto 0; width: calc(100% - 36px); max-width: 724px; }
 .login h2 { margin: 0 0 6px; font-size: 19px; }
 .login p { margin: 0 0 18px; color: var(--muted); max-width: 52ch; }
 .login .primary { font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 9px; border: 0; background: var(--rose); color: #1a0f14; cursor: pointer; }
@@ -46,6 +59,8 @@ input[type=search] {
 
 ul { list-style: none; margin: 0; padding: 0; }
 li { display: grid; grid-template-columns: 44px 1fr auto; gap: 12px; align-items: start; padding: 12px 8px; border-bottom: 1px solid var(--line); }
+li.link { cursor: pointer; border-radius: 8px; }
+li.link:hover { background: var(--panel); }
 li.unread .nick { color: #fff; }
 li.unread .preview { color: var(--text); font-weight: 500; }
 .av { position: relative; width: 44px; height: 44px; }
@@ -71,4 +86,4 @@ li.unread .preview { color: var(--text); font-weight: 500; }
 .msg.err { color: var(--rose); text-align: left; background: var(--panel); border-radius: 12px; padding: 16px; margin: 0 0 12px; }
 .loadmore { display: block; margin: 16px auto 0; }
 [hidden] { display: none !important; }
-@media (max-width: 520px) { .updated { margin-left: 0; width: 100%; } .status { display: none; } .tabs button { font-size: 19px; } }
+@media (max-width: 520px) { .updated { margin-left: 0; width: 100%; order: 1; } .status { display: none; } .tabs button { font-size: 19px; } }
